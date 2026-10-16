@@ -21,6 +21,17 @@ function) — display via RDP / SPICE / Looking Glass only.
 
 Out-of-tree module: `github.com/strongtz/i915-sriov-dkms`.
 
+> ⚠️ **If your kernel is newer than the module's `BUILD_EXCLUSIVE_KERNEL`, the
+> build is silently skipped** — `dkms status` shows `added`, never `installed`,
+> with **no error**. The repo ships **per-kernel branches** (`kernel-v6.12`,
+> `kernel-v6.19`, `kernel-v7.0`, `kernel-v7.1`, …): `git branch -a` and clone
+> the branch matching your kernel, not `master`. After a successful build you
+> **must** rebuild the initramfs (`sudo mkinitcpio -P`) and verify it packs
+> `updates/dkms/i915.ko` (else the stock `i915` loads and `max_vfs` is ignored →
+> 0 VFs). The Secure-Boot "module verification failed … tainting kernel" line
+> is **harmless** as long as VFs still appear — only enroll the MOK if the
+> module is actually *rejected*. Full detail: `references/field-lessons.md` §1.
+
 ```bash
 sudo pacman -S linux-cachyos-headers dkms sysfsutils git   # headers for your kernel
 git clone https://github.com/strongtz/i915-sriov-dkms.git
@@ -69,6 +80,20 @@ echo "devices/pci0000:00/0000:00:02.0/sriov_numvfs = 7" | sudo tee /etc/sysfs.co
 sudo reboot
 ```
 
+> **Both `i915.max_vfs=7` (cmdline) and the `sysfs.conf` line can silently do
+> nothing.** The cmdline param is ignored by stock `i915` (and strongtz doesn't
+> always honor it at load); the `sysfs.conf` line is dead unless `sysfsutils` is
+> actually installed (`systemctl status sysfsutils` — often absent on minimal
+> Arch). The **reliable** method is a udev rule that fires when `i915` binds the
+> PF:
+> ```
+> # /etc/udev/rules.d/99-i915-sriov.rules
+> ACTION=="bind", SUBSYSTEM=="pci", DRIVER=="i915", KERNEL=="0000:00:02.0", RUN+="/bin/sh -c 'echo 7 > /sys/bus/pci/devices/0000:00:02.0/sriov_numvfs'"
+> ```
+> (`KERNEL=="0000:00:02.0"` targets only the PF, not the VFs.) Writing
+> `sriov_numvfs` also requires the PF to be on `i915` (not vfio-bound). Detail:
+> `references/field-lessons.md` §2.
+
 Verify (1 root + 7 VFs, and `Enabled 7 VFs` in dmesg):
 
 ```bash
@@ -79,11 +104,16 @@ dmesg | grep i915         # ... i915 0000:00:02.0: Enabled 7 VFs
 ## 4. Pass one VF to the VM (libvirt XML)
 
 Pick **one** VF (e.g. `00:02.1`). **Never** pass the root `00:02.0` to a VM, and
-give each VM a **unique** VF. Make the VF the primary display by removing the
-emulated video:
+give each VM a **unique** VF. (**Why:** passing the PF detaches it to `vfio-pci`,
+which **tears down all the VFs** — `numvfs` drops 7→0, the VM "starts" with no
+VFs, and you can't recreate them while the PF is vfio-bound. The next start then
+fails with `Device 0000:00:02.1 not found`. Always pass a VF; the PF stays on
+`i915` and the other VFs persist. See `references/field-lessons.md` §3.) Make
+the VF the primary display by removing the emulated video:
 
 ```xml
-<!-- REMOVE the <video> element entirely (or set <video model='none'/>) -->
+<!-- REMOVE the <video> element entirely, or use <video><model type='none'/></video> -->
+<!-- (NOT <video model='none'/> — invalid schema; see field-lessons.md §4) -->
 <!-- <graphics>: keep SPICE/RDP for input + display; the VF has no physical output -->
 
 <hostdev mode='subsystem' type='pci' managed='yes'>

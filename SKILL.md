@@ -201,8 +201,11 @@ starts. Work through these in order:
       some report Code 43 only *after* updating). Then Group Policy → "Do not
       include drivers with Windows Update" = **Enabled**, so Windows can't swap
       in a broken 2022 driver.
-   d. **Make the iGPU the primary display** — remove the `<video>` element (or
-      `<video model='none'/>`) so the iGPU is the guest's only adapter.
+   d. **Make the iGPU the primary display** — remove the `<video>` element, or
+      use `<video><model type='none'/></video>`. ⚠️ `<video model='none'/>`
+      (model as an *attribute*) is **invalid schema** and is silently rejected;
+      `model` must be a child `<model type='none'/>`. See
+      `references/field-lessons.md` §4.
    e. **Disable → Enable** the device in Device Manager, or reboot, after the
       driver install (clears it for some).
    f. **GOP romfile** as a last resort: `<rom file='/usr/share/kvm/igpu.rom'/>`
@@ -432,13 +435,18 @@ sudo cp looking-glass-client /usr/local/bin/
    service so it can capture the login screen). Binary:
    `C:\Program Files\Looking Glass (host)\looking-glass-host.exe`; log:
    `%ProgramData%\Looking Glass (host)\looking-glass-host.txt`.
-2. **Virtual display** (if nothing is physically plugged into the guest GPU) —
-   install **IddSampleDriver** and configure the resolution (e.g. 3440×1440).
-   **Do not** make it the primary display until Looking Glass is confirmed
-   capturing it — doing so too early can lock you out. Set it secondary first.
+2. **Virtual display** (**mandatory** for an SR-IOV VF — it has no physical
+   output; optional for full passthrough with a real monitor) — install
+   **Virtual Display Driver (VDD)**, `github.com/VirtualDrivers/Virtual-Display-Driver`
+   (the maintained, *signed* successor to IddSampleDriver): in the guest,
+   `winget install --id=VirtualDrivers.Virtual-Display-Driver -e`, then add a
+   virtual display at the target resolution. Without one the LG host log shows
+   `Failed to locate a valid output device`. **Do not** make it the primary
+   display until LG is confirmed capturing it — too early can lock you out. See
+   `references/field-lessons.md` §6.
 3. **SPICE guest tools** for clipboard sync.
 
-Locked out after making IddSampleDriver primary? Recovery is to mount the QCOW2
+Locked out after making the virtual display primary? Recovery is to mount the QCOW2
 from the host and remove the driver files — see
 `references/troubleshooting.md` → "Locked out after display change".
 
@@ -462,10 +470,28 @@ problem. **Force the OpenGL renderer.** `~/.looking-glass-client.ini`:
 renderer=opengl
 ```
 
-That's the clean fix. Don't waste time on (all verified *not* to help):
-`trackDamage=false`, switching to DXGI, downgrading egl-wayland,
-`__NV_DISABLE_EXPLICIT_SYNC=1`, `egl:doubleBuffer=true`, `app:allowDMA=no`, or
-unsetting `WAYLAND_DISPLAY`.
+That's the clean fix. (For the flicker specifically — don't waste time on
+`trackDamage=false`, DXGI, downgrading egl-wayland, `egl:doubleBuffer=true`,
+`app:allowDMA=no`, or unsetting `WAYLAND_DISPLAY`. Note:
+`__NV_DISABLE_EXPLICIT_SYNC=1` does *not* fix this flicker, but it **is** the
+fix for the separate explicit-sync **crash** just below.)
+
+### The client-crash fix (NVIDIA + Wayland): explicit sync
+
+A *different* NVIDIA+Wayland failure: the LG client dies with
+`wp_linux_drm_syncobj_surface_v1 … error 3: Missing buffer` — the
+`linux-drm-syncobj-v1` (explicit-sync) protocol erroring between the NVIDIA EGL
+driver and the compositor. The flicker fix above does **not** address this.
+Disable NVIDIA explicit sync:
+
+```bash
+__NV_DISABLE_EXPLICIT_SYNC=1 looking-glass-client
+```
+
+Make it permanent with a **user-level `.desktop` override**
+(`~/.local/share/applications/looking-glass-client.desktop`, `Exec=env
+__NV_DISABLE_EXPLICIT_SYNC=1 /usr/bin/looking-glass-client`) so package updates
+don't clobber it. Full detail: `references/field-lessons.md` §5.
 
 ### Autostart the VM
 
@@ -478,6 +504,13 @@ virsh autostart --disable win11 # disable
 
 ## References (read on demand)
 
+- **`references/field-lessons.md`** — ⚠️ **read this first.** Scars from a real
+  kernel-7.x Alder Lake SR-IOV + Looking Glass install: the module-build traps
+  (`BUILD_EXCLUSIVE_KERNEL` + per-kernel branches + initramfs), reliable VF
+  creation, the PF/VF teardown trap, libvirt-XML sharp edges, the NVIDIA
+  explicit-sync crash, clipboard-after-reboot, and a "verify the running state"
+  cheatsheet. The procedure files below are the *happy path*; this is what
+  actually happens when it isn't.
 - **`references/troubleshooting.md`** — full symptom/cause/fix table; recovery
   for "locked out after display change" (mount QCOW2 via qemu-nbd); KVMFR/VFIO
   diagnostics. Read when a step fails or the VM misbehaves.

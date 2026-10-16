@@ -64,7 +64,7 @@ consider adding a `<rom file='/path/to/extracted.vbios'/>` inside the GPU
 | `/etc/udev/rules.d/99-kvmfr.rules` | `SUBSYSTEM=="kvmfr", OWNER="your_username", GROUP="kvm", MODE="0660"` |
 | `/etc/libvirt/qemu.conf` | Add `/dev/kvmfr0` to `cgroup_device_acl`; restart libvirtd |
 | `/etc/mkinitcpio.conf` | `MODULES=(vfio_pci vfio vfio_iommu_type1)`; rebuild with `sudo mkinitcpio -P` |
-| `~/.looking-glass-client.ini` | `[app]` / `renderer=opengl` (NVIDIA + Wayland flicker fix) |
+| `~/.looking-glass-client.ini` | `[app] renderer=opengl` (NVIDIA+Wayland **flicker** fix); `[input] rawMouse=yes` + `mouseSmoothing=no` (input latency); `[win] showFPS=yes` (diagnose). The **crash** fix (`__NV_DISABLE_EXPLICIT_SYNC=1`) is an *env var*, not this file — apply via a `~/.local/share/applications/` `.desktop` override. See `field-lessons.md` §5 |
 
 GVT-d-only additions: blacklist `i915` (e.g. `/etc/modprobe.d/i915.conf` →
 `blacklist i915`) so the host framebuffer driver doesn't grab the iGPU first.
@@ -76,7 +76,7 @@ GVT-d-only additions: blacklist `i915` (e.g. `/etc/modprobe.d/i915.conf` →
 | Looking Glass host | `C:\Program Files\Looking Glass (host)\looking-glass-host.exe` |
 | Host log | `%ProgramData%\Looking Glass (host)\looking-glass-host.txt` |
 | Capture method | D12 (default; fastest on Windows 10+) |
-| IddSampleDriver | Virtual display at target resolution (e.g. 3440×1440); set secondary first |
+| Virtual display driver | **VDD** (`github.com/VirtualDrivers/Virtual-Display-Driver`; `winget install --id=VirtualDrivers.Virtual-Display-Driver -e`) — required for a headless SR-IOV VF (gives D12 something to capture); set secondary until LG is capturing, then primary |
 | SPICE guest tools | Installed for clipboard sync / input integration |
 | GPU driver | Standalone installer from the vendor (auto-detect tools often fail in VMs) |
 
@@ -224,7 +224,8 @@ Update silently swapping it for a broken 2022 build:
 ### 4. Make the iGPU/VF the primary display
 
 If Windows POSTed with a different (emulated) adapter, the iGPU driver can fail.
-Remove the `<video>` element (or `<video model='none'/>`) so the iGPU/VF is the
+Remove the `<video>` element, or use `<video><model type='none'/></video>` (**not**
+`<video model='none'/>` — that's invalid schema), so the iGPU/VF is the
 guest's only/primary adapter. (Proxmox equivalents for cross-reference:
 `vga: none`, `Primary GPU` / `x-vga=1`.)
 
